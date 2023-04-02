@@ -1,2 +1,2 @@
-# bucket-protocol
-Lending protocol on Sui (similar to AAVE v2)
+# Bucket Protocol
+Zero-intereset lending protocol on Sui (similar to Liquity Protocol)
