@@ -198,18 +198,23 @@ module bucket_protocol::insertable_linked_table {
         object::delete(id)
     }
 
-    public fun insert<K: copy + drop + store, V: store>(table: &mut LinkedTable<K, V>, prev_k: K, k: K, value: V) {
-        let next_k = *next(table, prev_k);
-        if (option::is_none(&next_k)) {
-            push_back(table, k, value);
-        }
-        else {
-            let next_k = option::destroy_some(next_k);
-            field::borrow_mut<K, Node<K, V>>(&mut table.id, next_k).prev = option::some(k);
-            field::borrow_mut<K, Node<K, V>>(&mut table.id, prev_k).next = option::some(k);
-            let prev = option::some(prev_k);
-            let next = option::some(next_k);
-            field::add(&mut table.id, k, Node { prev, next, value })
+    public fun insert<K: copy + drop + store, V: store>(table: &mut LinkedTable<K, V>, prev_k: Option<K>, k: K, value: V) {
+        if (option::is_none(&prev_k)) {
+            push_front(table, k, value);
+        } else {
+            let prev_k = option::destroy_some(prev_k);
+            let next_k = *next(table, prev_k);
+            if (option::is_none(&next_k)) {
+                push_back(table, k, value);
+            }
+            else {
+                let next_k = option::destroy_some(next_k);
+                field::borrow_mut<K, Node<K, V>>(&mut table.id, next_k).prev = option::some(k);
+                field::borrow_mut<K, Node<K, V>>(&mut table.id, prev_k).next = option::some(k);
+                let prev = option::some(prev_k);
+                let next = option::some(next_k);
+                field::add(&mut table.id, k, Node { prev, next, value })
+            };
         };
         table.size = table.size + 1;
     }

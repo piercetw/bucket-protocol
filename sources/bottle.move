@@ -30,24 +30,22 @@ module bucket_protocol::bottle {
         prev_debtor: Option<address>,
     ) {
         if (option::is_some(&prev_debtor)) {
-            let prev_debtor = option::destroy_some(prev_debtor);
+            let prev_debtor = *option::borrow(&prev_debtor);
             let prev_bottle = ilt::borrow(bottle_table, prev_debtor);
             let next_debtor = *ilt::next(bottle_table, prev_debtor);
             if (option::is_some(&next_debtor)) {
                 let next_debtor = option::destroy_some(next_debtor);
                 let next_bottle = ilt::borrow(bottle_table, next_debtor);
                 assert!(
-                    cr_less(prev_bottle, &bottle) &&
-                        cr_greater_or_equal(next_bottle, &bottle),
+                    cr_greater(&bottle, prev_bottle) &&
+                        cr_less_or_equal(&bottle, next_bottle),
                     EUnsortedInsertion,
                 );
-                ilt::insert(bottle_table, prev_debtor, debtor, bottle);
             } else {
                 assert!(
-                    cr_less(prev_bottle, &bottle),
+                    cr_greater(&bottle, prev_bottle),
                     EUnsortedInsertion,
                 );
-                ilt::push_back(bottle_table, debtor, bottle);
             }
         } else {
             let next_debtor = *ilt::front(bottle_table);
@@ -55,14 +53,12 @@ module bucket_protocol::bottle {
                 let next_debtor = option::destroy_some(next_debtor);
                 let next_bottle = ilt::borrow(bottle_table, next_debtor);
                 assert!(
-                    cr_greater_or_equal(next_bottle, &bottle),
+                    cr_less_or_equal(&bottle, next_bottle),
                     EUnsortedInsertion,
                 );
-                ilt::push_front(bottle_table, debtor, bottle);
-            } else {
-                ilt::push_front(bottle_table, debtor, bottle);
             }
-        }
+        };
+        ilt::insert(bottle_table, prev_debtor, debtor, bottle);
     }
 
     public(friend) fun borrow_result(
@@ -140,12 +136,12 @@ module bucket_protocol::bottle {
         bottle.buck_amount
     }
 
-    fun cr_greater_or_equal(bottle_1: &Bottle, bottle_2: &Bottle): bool {
-        (bottle_1.sui_amount as u256) * (bottle_2.buck_amount as u256) >=
-            (bottle_2.sui_amount as u256) * (bottle_1.buck_amount as u256)
+    fun cr_greater(bottle: &Bottle, bottle_cmp: &Bottle): bool {
+        (bottle.sui_amount as u256) * (bottle_cmp.buck_amount as u256) >
+            (bottle_cmp.sui_amount as u256) * (bottle.buck_amount as u256)
     }
 
-    fun cr_less(bottle_1: &Bottle, bottle_2: &Bottle): bool {
-        !cr_greater_or_equal(bottle_1, bottle_2)
+    fun cr_less_or_equal(bottle: &Bottle, bottle_cmp: &Bottle): bool {
+        !cr_greater(bottle, bottle_cmp)
     }
 }
