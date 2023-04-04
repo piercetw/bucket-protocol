@@ -11,12 +11,12 @@ module bucket_protocol::bottle {
     const EDestroyNonEmptyBottle: u64 = 3;
 
     struct Bottle has store {
-        sui_amount: u64,
+        collateral_amount: u64,
         buck_amount: u64,
     }
 
-    public(friend) fun new(sui_amount: u64, buck_amount: u64): Bottle {
-        Bottle { sui_amount, buck_amount }
+    public(friend) fun new(collateral_amount: u64, buck_amount: u64): Bottle {
+        Bottle { collateral_amount, buck_amount }
     }
 
     public(friend) fun insert_bottle(
@@ -54,14 +54,14 @@ module bucket_protocol::bottle {
         price: u64,
         denominator: u64,
         collateral_ratio: u64,
-        sui_amount: u64,
+        collateral_amount: u64,
     ): u64 {
-        let sui_factor = (bottle.sui_amount + sui_amount) * price * 100;
+        let sui_factor = (bottle.collateral_amount + collateral_amount) * price * 100;
         let buck_factor = collateral_ratio * denominator * bottle.buck_amount;
         assert!(sui_factor > buck_factor, ECannotReachCollateralRatio);
 
         let minted_buck_amount = (sui_factor - buck_factor) / collateral_ratio * denominator;
-        bottle.sui_amount = bottle.sui_amount + sui_amount;
+        bottle.collateral_amount = bottle.collateral_amount + collateral_amount;
         bottle.buck_amount = bottle.buck_amount + minted_buck_amount;
 
         minted_buck_amount
@@ -69,14 +69,14 @@ module bucket_protocol::bottle {
 
     public(friend) fun repay_result(bottle: &mut Bottle, repay_amount: u64): (bool, u64) {
         if (repay_amount >= bottle.buck_amount) {
-            let return_sui_amount = bottle.sui_amount;
-            bottle.sui_amount = 0;
+            let return_sui_amount = bottle.collateral_amount;
+            bottle.collateral_amount = 0;
             bottle.buck_amount = 0;
             // fully repaid
             (true, return_sui_amount)
         } else {
-            let return_sui_amount = bottle.sui_amount * repay_amount / bottle.buck_amount;
-            bottle.sui_amount = bottle.sui_amount - return_sui_amount;
+            let return_sui_amount = bottle.collateral_amount * repay_amount / bottle.buck_amount;
+            bottle.collateral_amount = bottle.collateral_amount - return_sui_amount;
             bottle.buck_amount = bottle.buck_amount - repay_amount;
             // not fully repaid
             (false, return_sui_amount)
@@ -90,34 +90,34 @@ module bucket_protocol::bottle {
         buck_amount: u64,
     ): (u64, u64, u64, bool) {
         let redeemer_sui_amount = buck_amount * denominator / price;
-        assert!(bottle.sui_amount >= redeemer_sui_amount, ECannotRedeemFromBottle);
-        let debtor_sui_amount = bottle.sui_amount - redeemer_sui_amount;
+        assert!(bottle.collateral_amount >= redeemer_sui_amount, ECannotRedeemFromBottle);
+        let debtor_sui_amount = bottle.collateral_amount - redeemer_sui_amount;
 
         if (buck_amount >= bottle.buck_amount) {
-            bottle.sui_amount = 0;
+            bottle.collateral_amount = 0;
             bottle.buck_amount = 0;
             if (buck_amount == bottle.buck_amount)
                 (buck_amount, redeemer_sui_amount, debtor_sui_amount, true)
             else
                 (bottle.buck_amount, redeemer_sui_amount, debtor_sui_amount, false)
         } else {
-            bottle.sui_amount = bottle.sui_amount - redeemer_sui_amount;
+            bottle.collateral_amount = bottle.collateral_amount - redeemer_sui_amount;
             bottle.buck_amount = bottle.buck_amount - buck_amount;
             (buck_amount, redeemer_sui_amount, 0, true)
         }
     }
 
     public(friend) fun destroyable(bottle: &Bottle): bool {
-        bottle.sui_amount == 0 && bottle.buck_amount == 0
+        bottle.collateral_amount == 0 && bottle.buck_amount == 0
     }
 
     public(friend) fun destroy(bottle: Bottle) {
-        let Bottle { sui_amount, buck_amount } = bottle;
-        assert!(sui_amount == 0 && buck_amount == 0, EDestroyNonEmptyBottle);
+        let Bottle { collateral_amount, buck_amount } = bottle;
+        assert!(collateral_amount == 0 && buck_amount == 0, EDestroyNonEmptyBottle);
     }
 
-    public fun get_sui_amount(bottle: &Bottle): u64 {
-        bottle.sui_amount
+    public fun get_collateral_amount(bottle: &Bottle): u64 {
+        bottle.collateral_amount
     }
 
     public fun get_buck_amount(bottle: &Bottle): u64 {
@@ -125,8 +125,8 @@ module bucket_protocol::bottle {
     }
 
     public fun cr_greater(bottle: &Bottle, bottle_cmp: &Bottle): bool {
-        (bottle.sui_amount as u256) * (bottle_cmp.buck_amount as u256) >
-            (bottle_cmp.sui_amount as u256) * (bottle.buck_amount as u256)
+        (bottle.collateral_amount as u256) * (bottle_cmp.buck_amount as u256) >
+            (bottle_cmp.collateral_amount as u256) * (bottle.buck_amount as u256)
     }
 
     public fun cr_less_or_equal(bottle: &Bottle, bottle_cmp: &Bottle): bool {
@@ -135,7 +135,7 @@ module bucket_protocol::bottle {
 
     #[test_only]
     public fun print_bottle(bottle: &Bottle) {
-        std::debug::print(&(1000*bottle.sui_amount/bottle.buck_amount));
+        std::debug::print(&(1000*bottle.collateral_amount/bottle.buck_amount));
         std::debug::print(bottle);
     }
 
