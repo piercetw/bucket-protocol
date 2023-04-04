@@ -24,7 +24,7 @@ module bucket_protocol::mock_oracle {
 
         transfer::share_object( PriceFeed<SUI> {
             id: object::new(ctx),
-            price: 314159265,
+            price: 200000000,
             denominator: 100000000,
         });
     }
@@ -39,5 +39,18 @@ module bucket_protocol::mock_oracle {
         new_price: u64,
     ) {
         price_feed.price = new_price;
+    }
+
+    #[test_only]
+    public fun new_for_testing<T>(price: u64, denominator: u64, ctx: &mut TxContext): (PriceFeed<T>, FeederCap) {
+        (PriceFeed<T> {id: object::new(ctx), price, denominator}, FeederCap {id: object::new(ctx) })
+    }
+
+    #[test_only]
+    public fun destroy_for_testing<T>(oracle: PriceFeed<T>, feeder_cap: FeederCap) {
+        let PriceFeed {id, price: _, denominator: _ } = oracle;
+        object::delete(id);
+        let FeederCap { id} = feeder_cap;
+        object::delete(id);
     }
 }

@@ -213,10 +213,38 @@ module bucket_protocol::insertable_linked_table {
                 field::borrow_mut<K, Node<K, V>>(&mut table.id, prev_k).next = option::some(k);
                 let prev = option::some(prev_k);
                 let next = option::some(next_k);
-                field::add(&mut table.id, k, Node { prev, next, value })
+                field::add(&mut table.id, k, Node { prev, next, value });
+                table.size = table.size + 1;
             };
         };
-        table.size = table.size + 1;
+    }
+
+    #[test]
+    fun test_insert(): LinkedTable<address,u64> {
+        use sui::test_scenario;
+        use sui::test_utils;
+
+        let dev = @0xde1;
+        let scenario_val = test_scenario::begin(dev);
+        let scenario = &mut scenario_val;
+
+        let table = new<address, u64>(test_scenario::ctx(scenario));
+        insert(&mut table, option::none(), @0x1, 111);
+        insert(&mut table, option::some(@0x1), @0x3, 333);
+        insert(&mut table, option::some(@0x1), @0x2, 222);
+        insert(&mut table, option::some(@0x3), @0x5, 555);
+        insert(&mut table, option::some(@0x3), @0x4, 444);
+
+
+        test_utils::assert_ref_eq(front(&table), &option::some(@0x1));
+        test_utils::assert_ref_eq(next(&table,@0x1), &option::some(@0x2));
+        test_utils::assert_ref_eq(next(&table,@0x2), &option::some(@0x3));
+        test_utils::assert_ref_eq(next(&table,@0x3), &option::some(@0x4));
+        test_utils::assert_ref_eq(next(&table,@0x4), &option::some(@0x5));
+        test_utils::assert_ref_eq(back(&table), &option::some(@0x5));
+
+        test_scenario::end(scenario_val);
+        table
     }
 }
 
