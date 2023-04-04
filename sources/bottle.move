@@ -1,18 +1,14 @@
 module bucket_protocol::bottle {
 
     use std::option::{Self, Option};
-    use bucket_protocol::insertable_linked_table::{Self as table, LinkedTable};
+    use bucket_protocol::linked_table::{Self, LinkedTable};
 
     friend bucket_protocol::buck;
 
     const EUnsortedInsertion: u64 = 0;
-
     const ECannotReachCollateralRatio: u64 = 1;
-
     const ECannotRedeemFromBottle: u64 = 2;
-
     const EDestroyNonEmptyBottle: u64 = 3;
-
 
     struct Bottle has store {
         sui_amount: u64,
@@ -20,7 +16,7 @@ module bucket_protocol::bottle {
     }
 
     public(friend) fun new(sui_amount: u64, buck_amount: u64): Bottle {
-        Bottle { sui_amount, buck_amount}
+        Bottle { sui_amount, buck_amount }
     }
 
     public(friend) fun insert_bottle(
@@ -31,26 +27,26 @@ module bucket_protocol::bottle {
     ) {
         if (option::is_some(&prev_debtor_opt)) {
             let prev_debtor = *option::borrow(&prev_debtor_opt);
-            let prev_bottle = table::borrow(bottle_table, prev_debtor);
+            let prev_bottle = linked_table::borrow(bottle_table, prev_debtor);
             assert!(cr_greater(&bottle, prev_bottle), EUnsortedInsertion);
-            let next_debtor = *table::next(bottle_table, prev_debtor);
+            let next_debtor = *linked_table::next(bottle_table, prev_debtor);
             if (option::is_some(&next_debtor)) {
                 let next_debtor = option::destroy_some(next_debtor);
-                let next_bottle = table::borrow(bottle_table, next_debtor);
+                let next_bottle = linked_table::borrow(bottle_table, next_debtor);
                 assert!(cr_less_or_equal(&bottle, next_bottle), EUnsortedInsertion);
             };
         } else {
-            let next_debtor = *table::front(bottle_table);
+            let next_debtor = *linked_table::front(bottle_table);
             if (option::is_some(&next_debtor)) {
                 let next_debtor = option::destroy_some(next_debtor);
-                let next_bottle = table::borrow(bottle_table, next_debtor);
+                let next_bottle = linked_table::borrow(bottle_table, next_debtor);
                 assert!(
                     cr_less_or_equal(&bottle, next_bottle),
                     EUnsortedInsertion,
                 );
             }
         };
-        table::insert(bottle_table, prev_debtor_opt, debtor, bottle);
+        linked_table::insert_back(bottle_table, prev_debtor_opt, debtor, bottle);
     }
 
     public(friend) fun borrow_result(
@@ -145,12 +141,12 @@ module bucket_protocol::bottle {
 
     #[test_only]
     public fun print_bottle_table(bottle_table: &LinkedTable<address, Bottle>) {
-        let curr_debtor = table::front(bottle_table);
+        let curr_debtor = linked_table::front(bottle_table);
         while (option::is_some(curr_debtor)) {
             let debtor = *option::borrow(curr_debtor);
             std::debug::print(&debtor);
-            print_bottle(table::borrow(bottle_table, debtor));
-            curr_debtor = table::next(bottle_table, debtor);
+            print_bottle(linked_table::borrow(bottle_table, debtor));
+            curr_debtor = linked_table::next(bottle_table, debtor);
         }
     }
 }

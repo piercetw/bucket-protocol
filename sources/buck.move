@@ -11,24 +11,24 @@ module bucket_protocol::buck {
     use std::option::{Self, Option};
 
     use bucket_protocol::bottle::{Self, Bottle};
-    use bucket_protocol::insertable_linked_table::{Self as table, LinkedTable};
+    use bucket_protocol::linked_table::{Self, LinkedTable};
     use bucket_protocol::mock_oracle::{PriceFeed, get_price};
+    use bucket_protocol::well::{Self, Well};
 
     // Constant
 
-    const MINIMAL_COLLATERAL_RATIO: u64 = 110; // 110%
+    const MINIMAL_COLLATERAL_RATIO: u64 = 115; // 115%
+    const FLASH_LOAN_FEE: u64 = 5; // 0.5%
 
     // Errors
 
     const ECollateralRatioTooLow: u64 = 0;
-
     const EBottleNotFound: u64 = 1;
-
     const ENotLiquidateable: u64 = 2;
-
     const ENotEnoughToRedeem: u64 = 3;
-
     const ERepayTooMuch: u64 = 4;
+    const EFlashLoanError: u64 = 5;
+    const EBottleAlreadyExists: u64 = 6;
 
     // Types
 
@@ -39,6 +39,11 @@ module bucket_protocol::buck {
         sui_vault: Balance<SUI>,
         buck_treasury: TreasuryCap<BUCK>,
         bottle_table: LinkedTable<address, Bottle>,
+    }
+
+    struct FlashLoanRecipit {
+        amount: u64,
+        fee: u64,
     }
 
     // Init
@@ -59,8 +64,9 @@ module bucket_protocol::buck {
             id: object::new(ctx),
             buck_treasury,
             sui_vault: balance::zero(),
-            bottle_table: table::new(ctx),
-        })
+            bottle_table: linked_table::new(ctx),
+        });
+        well::create<BUCK>(ctx);
     }
 
     // Functions
@@ -80,8 +86,8 @@ module bucket_protocol::buck {
 
         let debtor = tx_context::sender(ctx);
 
-        let minted_buck_amount = if (table::contains(&bucket.bottle_table, debtor)) {
-            let bottle = table::remove(&mut bucket.bottle_table, debtor);
+        let minted_buck_amount = if (linked_table::contains(&bucket.bottle_table, debtor)) {
+            let bottle = linked_table::remove(&mut bucket.bottle_table, debtor);
             let buck_amount = bottle::borrow_result(&mut bottle, price, denominator, collateral_ratio, sui_amount);
             bottle::insert_bottle(
                 &mut bucket.bottle_table,
@@ -91,7 +97,7 @@ module bucket_protocol::buck {
             );
             buck_amount
         } else {
-            let buck_amount = sui_amount * price / denominator * 100 / collateral_ratio;
+            let buck_amount = sui_amount * price * 100 / denominator / collateral_ratio;
             bottle::insert_bottle(
                 &mut bucket.bottle_table,
                 debtor,
@@ -119,7 +125,7 @@ module bucket_protocol::buck {
         ctx: &mut TxContext,
     ): Balance<SUI> {
         let (price, denominator) = get_price(oracle);
-        let first_debtor = *table::front(&bucket.bottle_table);
+        let first_debtor = *linked_table::front(&bucket.bottle_table);
         let output_sui = balance::zero<SUI>();
         redeem_internal(
             bucket,
@@ -136,8 +142,8 @@ module bucket_protocol::buck {
 
     public fun is_liquidateable(bucket: &Bucket, oracle: &PriceFeed<SUI>, debtor: address): bool {
         let (price, denominator) = get_price(oracle);
-        assert!(table::contains(&bucket.bottle_table, debtor), EBottleNotFound);
-        let bottle = table::borrow(&bucket.bottle_table, debtor);
+        assert!(linked_table::contains(&bucket.bottle_table, debtor), EBottleNotFound);
+        let bottle = linked_table::borrow(&bucket.bottle_table, debtor);
         let bottle_sui_amount = bottle::get_sui_amount(bottle);
         let bottle_buck_amount= bottle::get_buck_amount(bottle);
         bottle_sui_amount * price / denominator <=
@@ -155,7 +161,7 @@ module bucket_protocol::buck {
     }
 
     public fun get_bottle_info(bucket: &Bucket, debtor: address): (u64, u64) {
-        let bottle = table::borrow(&bucket.bottle_table, debtor);
+        let bottle = linked_table::borrow(&bucket.bottle_table, debtor);
         (bottle::get_sui_amount(bottle), bottle::get_buck_amount(bottle))
     }
 
@@ -166,19 +172,39 @@ module bucket_protocol::buck {
         )
     }
 
+    public fun flash_borrow(bucket: &mut Bucket, amount: u64): (Balance<SUI>, FlashLoanRecipit) {
+        (
+            balance::split(&mut bucket.sui_vault, amount),
+            FlashLoanRecipit { amount, fee: amount * FLASH_LOAN_FEE / 1000 },
+        )
+    }
+
+    public fun flash_repay(
+        bucket: &mut Bucket,
+        well: &mut Well<BUCK>,
+        repaid_sui: Balance<SUI>,
+        recipit: FlashLoanRecipit
+    ) {
+        let FlashLoanRecipit {amount, fee} = recipit;
+        assert!(balance::value(&repaid_sui) == amount + fee, EFlashLoanError);
+        let sui_to_bucket = balance::split(&mut repaid_sui, amount);
+        balance::join(&mut bucket.sui_vault, sui_to_bucket);
+        well::collect_sui(well,  repaid_sui);
+    }
+
     fun repay_internal(
         bucket: &mut Bucket,
         input_buck: Balance<BUCK>,
         debtor: address,
     ): Balance<SUI> {
         let repay_amount = balance::value(&input_buck);
-        assert!(table::contains(&bucket.bottle_table, debtor), EBottleNotFound);
-        let bottle = table::borrow_mut(&mut bucket.bottle_table, debtor);
+        assert!(linked_table::contains(&bucket.bottle_table, debtor), EBottleNotFound);
+        let bottle = linked_table::borrow_mut(&mut bucket.bottle_table, debtor);
         assert!(bottle::get_buck_amount(bottle) >= repay_amount, ERepayTooMuch);
         let (is_fully_repaid, return_sui_amount) = bottle::repay_result(bottle, repay_amount);
         balance::decrease_supply(coin::supply_mut(&mut bucket.buck_treasury), input_buck);
         if (is_fully_repaid) {
-            bottle::destroy(table::remove(&mut bucket.bottle_table, debtor));
+            bottle::destroy(linked_table::remove(&mut bucket.bottle_table, debtor));
         };
         balance::split(&mut bucket.sui_vault, return_sui_amount)
     }
@@ -194,9 +220,9 @@ module bucket_protocol::buck {
     ) {
         assert!(option::is_some(&debtor_opt), ENotEnoughToRedeem);
         let debtor_opt = option::destroy_some(debtor_opt);
-        let next_debtor = *table::next(&bucket.bottle_table, debtor_opt);
+        let next_debtor = *linked_table::next(&bucket.bottle_table, debtor_opt);
 
-        let bottle = table::borrow_mut(&mut bucket.bottle_table, debtor_opt);
+        let bottle = linked_table::borrow_mut(&mut bucket.bottle_table, debtor_opt);
         let input_buck_amount = balance::value(input_buck);
         let (
             redeemed_buck_amount, redeemer_sui_amount, debtor_sui_amount, redemption_complete
@@ -216,7 +242,7 @@ module bucket_protocol::buck {
 
         // if destroy bottle
         if (bottle::destroyable(bottle)) {
-            bottle::destroy(table::remove(&mut bucket.bottle_table, debtor_opt));
+            bottle::destroy(linked_table::remove(&mut bucket.bottle_table, debtor_opt));
         };
 
         // if not complete, keep recursive
@@ -243,8 +269,7 @@ module bucket_protocol::buck {
     ): Balance<BUCK> {
         assert!(collateral_ratio > MINIMAL_COLLATERAL_RATIO, ECollateralRatioTooLow);
         let debtor = tx_context::sender(ctx);
-        // TODO: custom error
-        assert!(!table::contains(&bucket.bottle_table, debtor), 500);
+        assert!(!linked_table::contains(&bucket.bottle_table, debtor), EBottleAlreadyExists);
 
         let (price, denominator) = get_price(oracle);
         let sui_amount = balance::value(&input_sui);
@@ -265,7 +290,6 @@ module bucket_protocol::buck {
         balance::increase_supply(coin::supply_mut(&mut bucket.buck_treasury), buck_amount)
     }
 
-    // TODO: use more efficient algorithm
     fun find_valid_insertion(
         bucket: &Bucket,
         sui_amount: u64,
@@ -273,18 +297,18 @@ module bucket_protocol::buck {
     ): (Option<address>, Bottle) {
         let bottle = bottle::new(sui_amount, buck_amount);
         let bottle_table = &bucket.bottle_table;
-        let curr_debtor_opt = *table::front(&bucket.bottle_table);
+        let curr_debtor_opt = *linked_table::front(&bucket.bottle_table);
 
         while (option::is_some(&curr_debtor_opt)) {
             let curr_debtor = *option::borrow(&curr_debtor_opt);
-            let curr_bottle = table::borrow(bottle_table, curr_debtor);
+            let curr_bottle = linked_table::borrow(bottle_table, curr_debtor);
             if (bottle::cr_less_or_equal(&bottle, curr_bottle)) {
                 return (option::none(), bottle)
             };
-            let next_debtor_opt = table::next(bottle_table, curr_debtor);
+            let next_debtor_opt = linked_table::next(bottle_table, curr_debtor);
             if (option::is_none(next_debtor_opt)) break;
             let next_debtor = *option::borrow(next_debtor_opt);
-            let next_bottle = table::borrow(bottle_table, next_debtor);
+            let next_bottle = linked_table::borrow(bottle_table, next_debtor);
             if (bottle::cr_greater(&bottle, curr_bottle) &&
                 bottle::cr_less_or_equal(&bottle, next_bottle)
             ) {
@@ -312,7 +336,7 @@ module bucket_protocol::buck {
             id: object::new(ctx),
             buck_treasury,
             sui_vault: balance::zero(),
-            bottle_table: table::new(ctx),
+            bottle_table: linked_table::new(ctx),
         }
     }
 
@@ -320,14 +344,19 @@ module bucket_protocol::buck {
     fun test_borrow() {
         use sui::test_scenario;
         use sui::test_utils;
+        use sui::test_random;
+        use sui::address;
+        use std::vector;
         use bucket_protocol::mock_oracle;
-        use std::debug;
 
         let dev = @0xde1;
-        let borrower_1 = @0x111;
-        let borrower_2 = @0x222;
-        let borrower_3 = @0x333;
-        let borrower_4 = @0x444;
+        let borrowers = vector<address>[];
+        let borrower_count = 4;
+        let idx = 1u8;
+        while (idx <= borrower_count) {
+            vector::push_back(&mut borrowers, address::from_u256((idx as u256) + 10));
+            idx = idx + 1;
+        };
 
         let scenario_val = test_scenario::begin(dev);
         let scenario = &mut scenario_val;
@@ -335,68 +364,47 @@ module bucket_protocol::buck {
             init(test_utils::create_one_time_witness<BUCK>(), test_scenario::ctx(scenario));
         };
 
-        let (oracle, ocap) = mock_oracle::new_for_testing<SUI>(2000, 1000, test_scenario::ctx(scenario));
+        let (oracle, ocap) = mock_oracle::new_for_testing<SUI>(1000, 1000, test_scenario::ctx(scenario));
 
-        test_scenario::next_tx(scenario, borrower_1);
-        {
-            let bucket = test_scenario::take_shared<Bucket>(scenario);
+        let rang = test_random::new(b"bucket protocol");
+        let rangr = &mut rang;
+        idx = 0;
+        while (idx < borrower_count) {
+            let borrower = *vector::borrow(&borrowers, (idx as u64));
+            test_scenario::next_tx(scenario, borrower);
+            {
+                let bucket = test_scenario::take_shared<Bucket>(scenario);
 
-            let input_sui = balance::create_for_testing<SUI>(1000000);
-            let buck_output = auto_insert_borrow(&mut bucket, &oracle, input_sui, 125, test_scenario::ctx(scenario));
-            debug::print(&buck_output);
-            debug::print(&bucket.bottle_table);
-            test_utils::assert_eq(balance::value(&buck_output), 1000000*2/125*100);
-            test_utils::assert_eq(table::length(&bucket.bottle_table), 1);
-            balance::destroy_for_testing(buck_output);
+                let oracle_price = 500 + test_random::next_u64(rangr) % 2000;
+                mock_oracle::update_price(&ocap, &mut oracle, oracle_price);
 
-            test_scenario::return_shared(bucket);
+                let input_sui_amount = 1000000 * (test_random::next_u8(rangr) as u64) + test_random::next_u64(rangr) % 100000000;
+                let input_sui = balance::create_for_testing<SUI>(input_sui_amount);
+
+                let collateral_ratio = 110 + test_random::next_u64(rangr) % 2000;
+
+                let buck_output = auto_insert_borrow(
+                    &mut bucket,
+                    &oracle,
+                    input_sui,
+                    collateral_ratio,
+                    test_scenario::ctx(scenario)
+                );
+                bottle::print_bottle(linked_table::borrow(&bucket.bottle_table, borrower));
+                let expected_buck_amount = input_sui_amount * oracle_price * 100 / 1000 / collateral_ratio;
+                test_utils::assert_eq(balance::value(&buck_output), expected_buck_amount);
+                test_utils::assert_eq(linked_table::length(&bucket.bottle_table), (idx as u64) + 1);
+                balance::destroy_for_testing(buck_output);
+
+                test_scenario::return_shared(bucket);
+            };
+            idx = idx + 1;
         };
 
-        test_scenario::next_tx(scenario, borrower_2);
+        test_scenario::next_tx(scenario, dev);
         {
             let bucket = test_scenario::take_shared<Bucket>(scenario);
-            mock_oracle::update_price(&ocap, &mut oracle, 3000);
-
-            let input_sui = balance::create_for_testing<SUI>(2000);
-            let buck_output = auto_insert_borrow(&mut bucket, &oracle, input_sui, 150, test_scenario::ctx(scenario));
-            debug::print(&buck_output);
-            test_utils::assert_eq(balance::value(&buck_output), 2000*100*3/150);
-            test_utils::assert_eq(table::length(&bucket.bottle_table), 2);
-            balance::destroy_for_testing(buck_output);
-
-            debug::print(&bucket);
-            let (sui_total, buck_total) = get_total_nominal_collateral_ratio(&bucket);
-            test_utils::assert_eq(sui_total, 1002000);
-            test_utils::assert_eq(buck_total, 1604000);
-
-            test_scenario::return_shared(bucket);
-        };
-
-        test_scenario::next_tx(scenario, borrower_3);
-        {
-            let bucket = test_scenario::take_shared<Bucket>(scenario);
-            mock_oracle::update_price(&ocap, &mut oracle, 2500);
-
-            let input_sui = balance::create_for_testing<SUI>(30000);
-            let buck_output = auto_insert_borrow(&mut bucket, &oracle, input_sui, 1000, test_scenario::ctx(scenario));
-            debug::print(&buck_output);
-            // bottle::print_bottle_table(&bucket.bottle_table);
-
-            balance::destroy_for_testing(buck_output);
-            test_scenario::return_shared(bucket);
-        };
-
-        test_scenario::next_tx(scenario, borrower_4);
-        {
-            let bucket = test_scenario::take_shared<Bucket>(scenario);
-            mock_oracle::update_price(&ocap, &mut oracle, 1600);
-
-            let input_sui = balance::create_for_testing<SUI>(700000);
-            let buck_output = auto_insert_borrow(&mut bucket, &oracle, input_sui, 200, test_scenario::ctx(scenario));
-            debug::print(&buck_output);
             bottle::print_bottle_table(&bucket.bottle_table);
-
-            balance::destroy_for_testing(buck_output);
             test_scenario::return_shared(bucket);
         };
 

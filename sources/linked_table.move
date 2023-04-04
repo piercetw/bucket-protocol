@@ -3,7 +3,7 @@
 
 // Copyright (c) Bucket Protocol
 /// Similar to `sui::linked_table` but allowing insert element in the middle
-module bucket_protocol::insertable_linked_table {
+module bucket_protocol::linked_table {
     use std::option::{Self, Option};
     use sui::object::{Self, UID};
     use sui::dynamic_field as field;
@@ -198,7 +198,28 @@ module bucket_protocol::insertable_linked_table {
         object::delete(id)
     }
 
-    public fun insert<K: copy + drop + store, V: store>(table: &mut LinkedTable<K, V>, prev_k: Option<K>, k: K, value: V) {
+    public fun insert_front<K: copy + drop + store, V: store>(table: &mut LinkedTable<K, V>, next_k: Option<K>, k: K, value: V) {
+        if (option::is_none(&next_k)) {
+            push_back(table, k, value);
+        } else {
+            let next_k = option::destroy_some(next_k);
+            let prev_k = *prev(table, next_k);
+            if (option::is_none(&prev_k)) {
+                push_front(table, k, value);
+            } else {
+                let prev_k = option::destroy_some(prev_k);
+                field::borrow_mut<K, Node<K, V>>(&mut table.id, next_k).prev = option::some(k);
+                field::borrow_mut<K, Node<K, V>>(&mut table.id, prev_k).next = option::some(k);
+                let prev = option::some(prev_k);
+                let next = option::some(next_k);
+                field::add(&mut table.id, k, Node { prev, next, value });
+                table.size = table.size + 1;
+            }
+        }
+
+    }
+
+    public fun insert_back<K: copy + drop + store, V: store>(table: &mut LinkedTable<K, V>, prev_k: Option<K>, k: K, value: V) {
         if (option::is_none(&prev_k)) {
             push_front(table, k, value);
         } else {
@@ -206,8 +227,7 @@ module bucket_protocol::insertable_linked_table {
             let next_k = *next(table, prev_k);
             if (option::is_none(&next_k)) {
                 push_back(table, k, value);
-            }
-            else {
+            } else {
                 let next_k = option::destroy_some(next_k);
                 field::borrow_mut<K, Node<K, V>>(&mut table.id, next_k).prev = option::some(k);
                 field::borrow_mut<K, Node<K, V>>(&mut table.id, prev_k).next = option::some(k);
@@ -223,18 +243,26 @@ module bucket_protocol::insertable_linked_table {
     fun test_insert(): LinkedTable<address,u64> {
         use sui::test_scenario;
         use sui::test_utils;
+        use std::debug;
 
         let dev = @0xde1;
         let scenario_val = test_scenario::begin(dev);
         let scenario = &mut scenario_val;
 
         let table = new<address, u64>(test_scenario::ctx(scenario));
-        insert(&mut table, option::none(), @0x1, 111);
-        insert(&mut table, option::some(@0x1), @0x3, 333);
-        insert(&mut table, option::some(@0x1), @0x2, 222);
-        insert(&mut table, option::some(@0x3), @0x5, 555);
-        insert(&mut table, option::some(@0x3), @0x4, 444);
+        insert_back(&mut table, option::none(), @0x1, 111);
+        insert_back(&mut table, option::some(@0x1), @0x3, 333);
+        insert_front(&mut table, option::some(@0x3), @0x2, 222);
+        insert_back(&mut table, option::some(@0x3), @0x5, 555);
+        insert_front(&mut table, option::some(@0x5), @0x4, 444);
 
+        let curr_k = *front(&table);
+        while(option::is_some(&curr_k)) {
+            let key = option::borrow(&curr_k);
+            debug::print(&curr_k);
+            debug::print(borrow(&table, *key));
+            curr_k = *next(&table, *key);
+        };
 
         test_utils::assert_ref_eq(front(&table), &option::some(@0x1));
         test_utils::assert_ref_eq(next(&table,@0x1), &option::some(@0x2));

@@ -1,6 +1,7 @@
 module bucket_protocol::periphery {
 
     // Dependecies
+
     use std::vector;
     use std::option::Option;
     use sui::tx_context::{Self, TxContext};
@@ -8,10 +9,10 @@ module bucket_protocol::periphery {
     use sui::transfer;
     use sui::sui::SUI;
     use sui::pay;
+    use sui::balance;
 
     use bucket_protocol::buck::{Self, BUCK, Bucket};
     use bucket_protocol::mock_oracle::PriceFeed;
-    use sui::balance;
 
     public entry fun borrow(
         bucket: &mut Bucket,
